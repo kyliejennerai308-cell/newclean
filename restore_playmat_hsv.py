@@ -49,47 +49,50 @@ def _sl(pct):
     return pct * 2.55
 
 COLOUR_SPEC = {
+    # Ranges widened from the ideal spec to accommodate real-world scan
+    # variation: scanner colour shift, glare, wrinkles, lighting.
+    # Targets remain at the clean spec values.
     'BG_SKY_BLUE': {
         'target_hls': (_h(206), _sl(71), _sl(64)),
-        'range_h': (_h(198), _h(214)),
-        'range_s': (_sl(55), _sl(72)),
-        'range_l': (_sl(64), _sl(78)),
+        'range_h': (_h(190), _h(228)),
+        'range_s': (_sl(45), _sl(90)),
+        'range_l': (_sl(50), _sl(90)),
     },
     'PRIMARY_YELLOW': {
         'target_hls': (_h(59), _sl(61), _sl(98)),
-        'range_h': (_h(55), _h(61)),
-        'range_s': (_sl(92), _sl(100)),
-        'range_l': (_sl(55), _sl(66)),
+        'range_h': (_h(42), _h(78)),
+        'range_s': (_sl(75), _sl(100)),
+        'range_l': (_sl(38), _sl(72)),
     },
     'HOT_PINK': {
         'target_hls': (_h(338), _sl(55), _sl(96)),
-        'range_h': (_h(330), _h(346)),
-        'range_s': (_sl(90), _sl(100)),
-        'range_l': (_sl(48), _sl(62)),
+        'range_h': (_h(295), _h(350)),
+        'range_s': (_sl(50), _sl(100)),
+        'range_l': (_sl(25), _sl(80)),
     },
     'PURE_WHITE': {
         'target_hls': (_h(0), _sl(99), _sl(0)),
         'range_h': (0, 180),
-        'range_s': (0, _sl(4)),
-        'range_l': (_sl(96), 255),
+        'range_s': (0, _sl(8)),
+        'range_l': (_sl(90), 255),
     },
     'STEP_RED_OUTLINE': {
         'target_hls': (_h(345), _sl(52), _sl(94)),
-        'range_h': (_h(338), _h(352)),
-        'range_s': (_sl(88), _sl(98)),
-        'range_l': (_sl(46), _sl(58)),
+        'range_h': (_h(330), _h(360)),
+        'range_s': (_sl(50), _sl(100)),
+        'range_l': (_sl(25), _sl(80)),
     },
     'LIME_ACCENT': {
         'target_hls': (_h(89), _sl(55), _sl(92)),
-        'range_h': (_h(82), _h(96)),
-        'range_s': (_sl(85), _sl(96)),
-        'range_l': (_sl(48), _sl(62)),
+        'range_h': (_h(72), _h(120)),
+        'range_s': (_sl(35), _sl(100)),
+        'range_l': (_sl(25), _sl(80)),
     },
     'DEAD_BLACK': {
         'target_hls': (_h(0), _sl(2), _sl(0)),
         'range_h': (0, 180),
-        'range_s': (0, _sl(6)),
-        'range_l': (0, _sl(6)),
+        'range_s': (0, _sl(12)),
+        'range_l': (0, _sl(12)),
     },
 }
 
