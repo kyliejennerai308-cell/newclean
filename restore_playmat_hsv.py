@@ -200,21 +200,95 @@ def get_mask(hls_img, spec):
 # IMAGE PROCESSING PIPELINE
 # ============================================================================
 
+def _guided_filter(I, p, radius, eps):
+    """Self-guided filter: edge-aware smoothing without ximgproc.
+
+    Smooths flat regions aggressively while stopping at strong edges.
+    Equivalent to cv2.ximgproc.guidedFilter(I, p, radius, eps) when I == p.
+    """
+    I = I.astype(np.float32) / 255.0
+    p = p.astype(np.float32) / 255.0
+    ksize = (2 * radius + 1, 2 * radius + 1)
+
+    mean_I = cv2.boxFilter(I, -1, ksize)
+    mean_p = cv2.boxFilter(p, -1, ksize)
+    corr_Ip = cv2.boxFilter(I * p, -1, ksize)
+    corr_II = cv2.boxFilter(I * I, -1, ksize)
+
+    var_I = corr_II - mean_I * mean_I
+    cov_Ip = corr_Ip - mean_I * mean_p
+
+    a = cov_Ip / (var_I + eps)
+    b = mean_p - a * mean_I
+
+    mean_a = cv2.boxFilter(a, -1, ksize)
+    mean_b = cv2.boxFilter(b, -1, ksize)
+
+    return np.clip((mean_a * I + mean_b) * 255, 0, 255).astype(np.uint8)
+
+
+def _auto_gamma(l_channel):
+    """Auto-gamma correction: push mean brightness toward mid-grey.
+
+    Compensates for under/over-exposure before CLAHE to ensure the
+    adaptive equalisation starts from a balanced baseline.
+    """
+    mean = np.mean(l_channel)
+    if mean < 1:
+        return l_channel
+    gamma = np.log(127.0) / np.log(mean)
+    gamma = np.clip(gamma, 0.5, 2.0)
+    table = np.array([
+        np.clip(((i / 255.0) ** gamma) * 255, 0, 255)
+        for i in range(256)
+    ], dtype=np.uint8)
+    return cv2.LUT(l_channel, table)
+
+
+def _unsharp_mask(img, sigma=1.0, strength=0.5):
+    """Unsharp masking: sharpen edges before quantisation.
+
+    Creates a high-frequency detail layer (original − blur) and adds it
+    back at controlled strength, making logo/text boundaries crisper
+    without amplifying vinyl grain noise.
+    """
+    blurred = cv2.GaussianBlur(img, (0, 0), sigma)
+    return cv2.addWeighted(img, 1.0 + strength, blurred, -strength, 0)
+
+
 def prep_image(img):
     """Pre-processing: flatten vinyl texture / glare while keeping edges.
 
     1. Bilateral filter — smooths scan grain but preserves sharp edges at
        logo boundaries (unlike Gaussian blur which smears them).
-    2. CLAHE on L channel — local contrast enhancement makes small white
+    2. Guided filter — edge-aware smoothing that further flattens vinyl
+       texture while hard-stopping at logo/text boundaries.
+    3. Auto-gamma — normalise exposure before CLAHE to avoid bias.
+    4. CLAHE on L channel — local contrast enhancement makes small white
        text pop against the blue background, even in shadowed regions.
+    5. Unsharp mask — sharpen logo/text edges before colour quantisation.
     """
     smoothed = cv2.bilateralFilter(img, d=9, sigmaColor=75, sigmaSpace=75)
+
+    # Guided filter for additional edge-aware smoothing
+    gray_guide = cv2.cvtColor(smoothed, cv2.COLOR_BGR2GRAY)
+    for c in range(3):
+        smoothed[:, :, c] = _guided_filter(
+            gray_guide, smoothed[:, :, c], radius=4, eps=0.01)
+
     lab = cv2.cvtColor(smoothed, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
+
+    # Auto-gamma to normalise exposure baseline
+    l_ch = _auto_gamma(l_ch)
+
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     l_ch = clahe.apply(l_ch)
     enhanced = cv2.merge((l_ch, a_ch, b_ch))
-    return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+    result = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+    # Unsharp mask to crisp up edges before quantisation
+    return _unsharp_mask(result, sigma=1.0, strength=0.5)
 
 
 def detect_edges_keepout(gray):
@@ -261,6 +335,33 @@ def detect_dark_outlines(gray):
     return cv2.subtract(dark_mask, eroded)
 
 
+def _area_open(mask, min_area=64):
+    """Remove connected components smaller than min_area pixels.
+
+    Superior to morphological OPEN for noise removal because it removes
+    tiny blobs regardless of shape without eroding the edges of larger
+    regions.  Uses cv2.connectedComponentsWithStats for efficiency.
+    """
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask, connectivity=8)
+    cleaned = np.zeros_like(mask)
+    for label in range(1, num_labels):
+        if stats[label, cv2.CC_STAT_AREA] >= min_area:
+            cleaned[labels == label] = 255
+    return cleaned
+
+
+def _conditional_dilate(mask, original, kernel, iterations=1):
+    """Dilate mask but only where pixels existed in the original.
+
+    Restores thin strokes that morphological close may have slightly
+    displaced, without allowing the mask to grow into new territory.
+    This prevents outline masks from bleeding into adjacent fill regions.
+    """
+    dilated = gpu_dilate(mask, kernel, iterations=iterations)
+    return cv2.bitwise_and(dilated, original)
+
+
 def process_image(image_path):
     """Run the full 8-colour cleanup pipeline on a single image."""
     print(f"Processing: {image_path.name}")
@@ -305,15 +406,25 @@ def process_image(image_path):
             raw_masks[outline_name], boost)
 
     # Step 4 — Edge Preservation.
-    # Morphological close fills small holes; OPEN is restricted to
-    # BG_SKY_BLUE.  The Canny edge keep-out zone prevents fill masks
-    # from bleeding across fine borders.
+    # Morphological close fills small holes; area-open removes tiny noise
+    # blobs based on connected-component size (superior to morph OPEN which
+    # erodes edges uniformly).  Conditional dilation restores thin strokes
+    # that close may have slightly thickened — it only grows pixels that
+    # existed in the original mask, preventing bleed.
     edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     masks = {}
     for name, m in raw_masks.items():
+        original = m.copy()
         m = gpu_morphology(m, cv2.MORPH_CLOSE, edge_kernel)
         if name == 'BG_SKY_BLUE':
-            m = gpu_morphology(m, cv2.MORPH_OPEN, edge_kernel)
+            # Area-open: remove connected components < 64px.  This threshold
+            # corresponds to roughly an 8×8 pixel blob — small enough to be
+            # scan noise but large enough to preserve intentional detail.
+            m = _area_open(m, min_area=64)
+        if name in OUTLINE_COLOURS or name in ('PURE_WHITE', 'LIME_ACCENT'):
+            # Conditional dilation: restore thin strokes only where they
+            # existed before close, preventing bleed into adjacent colours.
+            m = _conditional_dilate(m, original, edge_kernel)
         masks[name] = m
 
     # Apply Canny keep-out: subtract edge zone from fill colours to prevent
