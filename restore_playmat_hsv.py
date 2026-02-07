@@ -10,11 +10,10 @@ Uses GPU acceleration (CUDA) where available for faster processing.
 
 Usage:
     Place scanned images in the 'scans/' folder and run this script.
-    Add --use-gpu to enable CUDA acceleration when available.
     Cleaned images will be saved to 'scans/output/'.
+    NOTE: No variable command flags are implemented.
 """
 
-import argparse
 import cv2
 import numpy as np
 import sys
@@ -599,16 +598,8 @@ def process_image(image_path):
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Vinyl Playmat Restoration — New Colour Regime")
-    parser.add_argument(
-        '--use-gpu',
-        action='store_true',
-        help='Enable CUDA/GPU acceleration if available')
-    args = parser.parse_args()
-
     global USE_GPU
-    USE_GPU = args.use_gpu and GPU_AVAILABLE
+    USE_GPU = GPU_AVAILABLE
 
     print("=" * 60)
     print("  Vinyl Playmat Restoration — New Colour Regime")
@@ -617,10 +608,10 @@ def main():
     gpu_status = (
         "ENABLED"
         if USE_GPU
-        else ("disabled (CPU mode)" if GPU_AVAILABLE else "not available (CPU mode)")
+        else "not available (CPU mode)"
     )
     print(f"  GPU acceleration: {gpu_status}")
-    if args.use_gpu and not GPU_AVAILABLE:
+    if not GPU_AVAILABLE:
         print(f"  GPU note: {GPU_DETECTION_MESSAGE}")
     elif USE_GPU and GPU_BACKEND:
         print(f"  GPU backend: {GPU_BACKEND}")
