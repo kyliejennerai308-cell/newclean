@@ -95,6 +95,8 @@ except Exception as exc:
     GPU_BACKEND = None
     GPU_DETECTION_MESSAGE = f"GPU detection failed: {exc}"
 
+USE_GPU = GPU_AVAILABLE
+
 
 def _use_opencv_cuda():
     return USE_GPU and GPU_BACKEND == 'opencv'
@@ -598,9 +600,6 @@ def process_image(image_path):
 # ============================================================================
 
 def main():
-    global USE_GPU
-    USE_GPU = GPU_AVAILABLE
-
     print("=" * 60)
     print("  Vinyl Playmat Restoration — New Colour Regime")
     print("=" * 60)
