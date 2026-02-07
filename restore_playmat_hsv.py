@@ -10,9 +10,11 @@ Uses GPU acceleration (CUDA) where available for faster processing.
 
 Usage:
     Place scanned images in the 'scans/' folder and run this script.
+    Add --use-gpu to enable CUDA acceleration when available.
     Cleaned images will be saved to 'scans/output/'.
 """
 
+import argparse
 import cv2
 import numpy as np
 import sys
@@ -25,15 +27,78 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 INPUT_DIR = SCRIPT_DIR / "scans"
 OUTPUT_DIR = SCRIPT_DIR / "scans" / "output"
 
+cv2.setUseOptimized(True)
+cv2.setNumThreads(0)
+
 # ============================================================================
 # GPU DETECTION — use CUDA when available, fall back to CPU transparently
 # ============================================================================
 USE_GPU = False
+GPU_AVAILABLE = False
+GPU_BACKEND = None
+GPU_DETECTION_MESSAGE = ""
+
 try:
-    if cv2.cuda.getCudaEnabledDeviceCount() > 0:
-        USE_GPU = True
-except AttributeError:
-    pass
+    import cupy as cp
+    CUPY_AVAILABLE = True
+except ImportError:
+    cp = None
+    CUPY_AVAILABLE = False
+
+
+def _detect_gpu():
+    """Detect GPU/CUDA availability and provide diagnostic information."""
+    has_cuda_module = hasattr(cv2, 'cuda')
+    if has_cuda_module and hasattr(cv2.cuda, 'getCudaEnabledDeviceCount'):
+        try:
+            device_count = cv2.cuda.getCudaEnabledDeviceCount()
+            if device_count > 0:
+                try:
+                    device_info = cv2.cuda.getDevice()
+                    return True, 'opencv', (
+                        f"OpenCV CUDA enabled with {device_count} device(s). "
+                        f"Active device: {device_info}")
+                except (cv2.error, AttributeError):
+                    return True, 'opencv', (
+                        f"OpenCV CUDA enabled with {device_count} device(s).")
+        except cv2.error:
+            pass
+
+    if CUPY_AVAILABLE:
+        try:
+            device_count = cp.cuda.runtime.getDeviceCount()
+            if device_count > 0:
+                device_props = cp.cuda.runtime.getDeviceProperties(0)
+                device_name = (
+                    device_props['name'].decode('utf-8')
+                    if isinstance(device_props['name'], bytes)
+                    else device_props['name']
+                )
+                return True, 'cupy', (
+                    f"CuPy CUDA enabled with {device_count} device(s). "
+                    f"GPU: {device_name}")
+        except Exception:
+            pass
+
+    if CUPY_AVAILABLE:
+        return False, None, (
+            "CuPy installed but no CUDA GPU detected. "
+            "Check your NVIDIA drivers.")
+    return False, None, (
+        "No GPU backend available. Install CuPy for GPU acceleration: "
+        "pip install cupy-cuda12x")
+
+
+try:
+    GPU_AVAILABLE, GPU_BACKEND, GPU_DETECTION_MESSAGE = _detect_gpu()
+except Exception as exc:
+    GPU_AVAILABLE = False
+    GPU_BACKEND = None
+    GPU_DETECTION_MESSAGE = f"GPU detection failed: {exc}"
+
+
+def _use_opencv_cuda():
+    return USE_GPU and GPU_BACKEND == 'opencv'
 
 # ============================================================================
 # MASTER COLOUR SPECIFICATION (HSL)
@@ -126,7 +191,7 @@ OUTLINE_COLOURS = {'STEP_RED_OUTLINE', 'DARK_PURPLE'}
 
 def gpu_cvt_color(src, code):
     """Colour-space conversion with GPU fallback."""
-    if USE_GPU:
+    if _use_opencv_cuda():
         try:
             g = cv2.cuda_GpuMat()
             g.upload(src)
@@ -148,7 +213,7 @@ def _gpu_morph_apply(src, op, kernel, iterations):
 
 def gpu_morphology(src, op, kernel, iterations=1):
     """Morphological operation (close / open) with GPU fallback."""
-    if USE_GPU:
+    if _use_opencv_cuda():
         try:
             return _gpu_morph_apply(src, op, kernel, iterations)
         except Exception:
@@ -158,7 +223,7 @@ def gpu_morphology(src, op, kernel, iterations=1):
 
 def gpu_erode(src, kernel, iterations=1):
     """Erosion with GPU fallback."""
-    if USE_GPU:
+    if _use_opencv_cuda():
         try:
             return _gpu_morph_apply(src, cv2.MORPH_ERODE, kernel, iterations)
         except Exception:
@@ -168,7 +233,7 @@ def gpu_erode(src, kernel, iterations=1):
 
 def gpu_dilate(src, kernel, iterations=1):
     """Dilation with GPU fallback."""
-    if USE_GPU:
+    if _use_opencv_cuda():
         try:
             return _gpu_morph_apply(src, cv2.MORPH_DILATE, kernel, iterations)
         except Exception:
@@ -487,24 +552,37 @@ def process_image(image_path):
         bgr_lut = np.array([BGR_TARGETS[n] for n in order], dtype=np.uint8)
 
         CHUNK = 500_000
+        use_cupy = USE_GPU and GPU_BACKEND == 'cupy' and CUPY_AVAILABLE
+        targets_gpu = cp.asarray(targets) if use_cupy else None
+        bgr_lut_gpu = cp.asarray(bgr_lut) if use_cupy else None
         for start in range(0, len(um_hls), CHUNK):
             end = min(start + CHUNK, len(um_hls))
-            chunk = um_hls[start:end]
-
-            # Circular hue distance (H range 0-180 in OpenCV)
-            dh = np.abs(chunk[:, 0:1] - targets[:, 0])  # (C, 8)
-            dh = np.minimum(dh, 180.0 - dh)
-            dh *= (255.0 / 180.0)  # normalise to 0-255 scale
-
-            dl = np.abs(chunk[:, 1:2] - targets[:, 1])  # (C, 8)
-            ds = np.abs(chunk[:, 2:3] - targets[:, 2])  # (C, 8)
-
-            dist = dh ** 2 + dl ** 2 + ds ** 2
-            nearest_idx = np.argmin(dist, axis=1)
-
             rows = um_indices[0][start:end]
             cols = um_indices[1][start:end]
-            result[rows, cols] = bgr_lut[nearest_idx]
+            if use_cupy:
+                chunk = cp.asarray(um_hls[start:end])
+                dh = cp.abs(chunk[:, 0:1] - targets_gpu[:, 0])
+                dh = cp.minimum(dh, 180.0 - dh)
+                dh *= (255.0 / 180.0)
+                dl = cp.abs(chunk[:, 1:2] - targets_gpu[:, 1])
+                ds = cp.abs(chunk[:, 2:3] - targets_gpu[:, 2])
+                dist = dh ** 2 + dl ** 2 + ds ** 2
+                nearest_idx = cp.argmin(dist, axis=1)
+                result[rows, cols] = cp.asnumpy(bgr_lut_gpu[nearest_idx])
+            else:
+                chunk = um_hls[start:end]
+                # Circular hue distance (H range 0-180 in OpenCV)
+                dh = np.abs(chunk[:, 0:1] - targets[:, 0])  # (C, 8)
+                dh = np.minimum(dh, 180.0 - dh)
+                dh *= (255.0 / 180.0)  # normalise to 0-255 scale
+
+                dl = np.abs(chunk[:, 1:2] - targets[:, 1])  # (C, 8)
+                ds = np.abs(chunk[:, 2:3] - targets[:, 2])  # (C, 8)
+
+                dist = dh ** 2 + dl ** 2 + ds ** 2
+                nearest_idx = np.argmin(dist, axis=1)
+
+                result[rows, cols] = bgr_lut[nearest_idx]
 
     # Output contains only the 8 permitted colours.
     # Save as PNG (lossless) to guarantee no compression artifacts.
@@ -521,10 +599,31 @@ def process_image(image_path):
 # ============================================================================
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Vinyl Playmat Restoration — New Colour Regime")
+    parser.add_argument(
+        '--use-gpu',
+        action='store_true',
+        help='Enable CUDA/GPU acceleration if available')
+    args = parser.parse_args()
+
+    global USE_GPU
+    USE_GPU = args.use_gpu and GPU_AVAILABLE
+
     print("=" * 60)
     print("  Vinyl Playmat Restoration — New Colour Regime")
     print("=" * 60)
-    print(f"  GPU acceleration: {'ENABLED' if USE_GPU else 'not available (CPU mode)'}")
+    print("  Get ready.")
+    gpu_status = (
+        "ENABLED"
+        if USE_GPU
+        else ("disabled (CPU mode)" if GPU_AVAILABLE else "not available (CPU mode)")
+    )
+    print(f"  GPU acceleration: {gpu_status}")
+    if args.use_gpu and not GPU_AVAILABLE:
+        print(f"  GPU note: {GPU_DETECTION_MESSAGE}")
+    elif USE_GPU and GPU_BACKEND:
+        print(f"  GPU backend: {GPU_BACKEND}")
     print(f"  Input:  {INPUT_DIR}")
     print(f"  Output: {OUTPUT_DIR}")
     print("=" * 60)
