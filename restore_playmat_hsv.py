@@ -5,7 +5,7 @@ Vinyl Playmat Digital Restoration Script — New Colour Regime
 Removes wrinkles, glare, and texture from scanned vinyl playmat images
 while preserving logos, text, stars, and silhouettes with accurate colors.
 
-Only the 7 Master Digital Cleanup colours are permitted in output.
+Only the 8 Master Digital Cleanup colours are permitted in output.
 Uses GPU acceleration (CUDA) where available for faster processing.
 
 Usage:
@@ -68,9 +68,15 @@ COLOUR_SPEC = {
     },
     'HOT_PINK': {
         'target_hls': (_h(338), _sl(55), _sl(96)),
-        'range_h': (_h(280), _h(340)),
+        'range_h': (_h(295), _h(340)),
         'range_s': (_sl(45), _sl(100)),
         'range_l': (_sl(20), _sl(82)),
+    },
+    'DARK_PURPLE': {
+        'target_hls': (_h(275), _sl(35), _sl(80)),
+        'range_h': (_h(240), _h(295)),
+        'range_s': (_sl(35), _sl(100)),
+        'range_l': (_sl(15), _sl(70)),
     },
     'PURE_WHITE': {
         'target_hls': (_h(0), _sl(99), _sl(0)),
@@ -207,16 +213,15 @@ def process_image(image_path):
     for name, spec in COLOUR_SPEC.items():
         raw_masks[name] = get_mask(hls, spec).astype(np.uint8) * 255
 
-    # Step 4 — Edge Preservation: morphological close then open on each mask
-    # to fill small holes and remove speckle while keeping outlines crisp.
-    # Text-carrying colours (PURE_WHITE, LIME_ACCENT) skip OPEN to avoid
-    # eroding thin strokes — only CLOSE is applied to fill tiny gaps.
-    TEXT_COLOURS = {'PURE_WHITE', 'LIME_ACCENT'}
+    # Step 4 — Edge Preservation: morphological close on each mask to fill
+    # small holes.  Only BG_SKY_BLUE (large background) also gets OPEN for
+    # noise removal — all detail-carrying colours skip OPEN to preserve thin
+    # strokes, small text, badge details, and fine outlines.
     edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     masks = {}
     for name, m in raw_masks.items():
         m = gpu_morphology(m, cv2.MORPH_CLOSE, edge_kernel)
-        if name not in TEXT_COLOURS:
+        if name == 'BG_SKY_BLUE':
             m = gpu_morphology(m, cv2.MORPH_OPEN, edge_kernel)
         masks[name] = m
 
@@ -244,7 +249,8 @@ def process_image(image_path):
     # Assign colours using priority order (highest first)
     order = [
         'PURE_WHITE', 'DEAD_BLACK', 'PRIMARY_YELLOW',
-        'STEP_RED_OUTLINE', 'HOT_PINK', 'LIME_ACCENT', 'BG_SKY_BLUE',
+        'STEP_RED_OUTLINE', 'HOT_PINK', 'DARK_PURPLE',
+        'LIME_ACCENT', 'BG_SKY_BLUE',
     ]
 
     result = np.zeros_like(img)
