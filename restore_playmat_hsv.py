@@ -52,6 +52,8 @@ COLOUR_SPEC = {
     # Ranges widened from the ideal spec to accommodate real-world scan
     # variation: scanner colour shift, glare, wrinkles, lighting.
     # Targets remain at the clean spec values.
+    # Hue ranges use exclusive bands to avoid misclassification in dense
+    # regions; the nearest-colour fallback handles edge-case pixels.
     'BG_SKY_BLUE': {
         'target_hls': (_h(206), _sl(71), _sl(64)),
         'range_h': (_h(190), _h(228)),
@@ -60,15 +62,15 @@ COLOUR_SPEC = {
     },
     'PRIMARY_YELLOW': {
         'target_hls': (_h(59), _sl(61), _sl(98)),
-        'range_h': (_h(42), _h(78)),
-        'range_s': (_sl(75), _sl(100)),
-        'range_l': (_sl(38), _sl(72)),
+        'range_h': (_h(38), _h(60)),
+        'range_s': (_sl(70), _sl(100)),
+        'range_l': (_sl(35), _sl(75)),
     },
     'HOT_PINK': {
         'target_hls': (_h(338), _sl(55), _sl(96)),
-        'range_h': (_h(295), _h(350)),
-        'range_s': (_sl(50), _sl(100)),
-        'range_l': (_sl(25), _sl(80)),
+        'range_h': (_h(280), _h(340)),
+        'range_s': (_sl(45), _sl(100)),
+        'range_l': (_sl(20), _sl(82)),
     },
     'PURE_WHITE': {
         'target_hls': (_h(0), _sl(99), _sl(0)),
@@ -78,9 +80,9 @@ COLOUR_SPEC = {
     },
     'STEP_RED_OUTLINE': {
         'target_hls': (_h(345), _sl(52), _sl(94)),
-        'range_h': (_h(330), _h(360)),
-        'range_s': (_sl(50), _sl(100)),
-        'range_l': (_sl(25), _sl(80)),
+        'range_h': (_h(340), _h(20)),
+        'range_s': (_sl(45), _sl(100)),
+        'range_l': (_sl(20), _sl(82)),
     },
     'LIME_ACCENT': {
         'target_hls': (_h(89), _sl(55), _sl(92)),
