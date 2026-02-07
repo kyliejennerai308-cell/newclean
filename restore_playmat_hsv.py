@@ -19,10 +19,11 @@ import sys
 from pathlib import Path
 
 # ============================================================================
-# FIXED PATHS — no command-line arguments
+# FIXED PATHS — resolved relative to this script so it works regardless of CWD
 # ============================================================================
-INPUT_DIR = Path("scans")
-OUTPUT_DIR = Path("scans/output")
+SCRIPT_DIR = Path(__file__).resolve().parent
+INPUT_DIR = SCRIPT_DIR / "scans"
+OUTPUT_DIR = SCRIPT_DIR / "scans" / "output"
 
 # ============================================================================
 # GPU DETECTION — use CUDA when available, fall back to CPU transparently
@@ -251,8 +252,11 @@ def process_image(image_path):
     # Output contains only the 7 permitted colours.
     # Save as PNG (lossless) to guarantee no compression artifacts.
     output_path = OUTPUT_DIR / (image_path.stem + ".png")
-    cv2.imwrite(str(output_path), result)
-    print(f"  Saved: {output_path}")
+    success = cv2.imwrite(str(output_path), result)
+    if not success or not output_path.exists():
+        print(f"  ERROR: failed to write {output_path}")
+    else:
+        print(f"  Saved: {output_path} ({output_path.stat().st_size} bytes)")
 
 
 # ============================================================================

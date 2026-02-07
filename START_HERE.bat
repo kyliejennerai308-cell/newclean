@@ -9,6 +9,9 @@ REM   3. Wait for processing to complete
 REM   4. Find cleaned images in "scans/output" folder
 REM ============================================================================
 
+REM Change to the directory where this batch file lives
+cd /d "%~dp0"
+
 title Vinyl Playmat Restoration - New Colour Regime
 color 0A
 echo.
