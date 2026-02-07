@@ -9,20 +9,21 @@ REM   3. Wait for processing to complete
 REM   4. Find cleaned images in "scans/output" folder
 REM ============================================================================
 
-title Vinyl Playmat Restoration - HSV Color Detection
+REM Change to the directory where this batch file lives
+cd /d "%~dp0"
+
+title Vinyl Playmat Restoration - New Colour Regime
 color 0A
 echo.
 echo ============================================================================
-echo     VINYL PLAYMAT RESTORATION - HSV COLOR DETECTION
+echo     VINYL PLAYMAT RESTORATION - NEW COLOUR REGIME
 echo ============================================================================
 echo.
 echo This script will:
 echo   - Check Python installation
 echo   - Install required packages (opencv-python, numpy)
-echo   - Process all images in the "scans" folder with optimized settings:
-echo     * Preserve original Green outline strokes (extracted from scan)
-echo     * Protect fine details like copyright text and fingers
-echo     * Enable GPU acceleration if available
+echo   - Process all images in the "scans" folder
+echo   - Use GPU acceleration where available
 echo   - Output cleaned images to "scans/output"
 echo.
 echo ============================================================================
@@ -51,20 +52,13 @@ if errorlevel 1 (
 echo [OK] Packages installed successfully
 echo.
 
-REM Run the restoration script with optimized options
+REM Run the restoration script (no arguments — paths are built in)
 echo ============================================================================
 echo Processing images...
 echo ============================================================================
 echo.
-echo Active Flags:
-echo   - GPU Enabled (--use-gpu)
-echo   - Full Cleanup (--no-preserve-detail)
-echo.
-echo * NOTE: Full cleanup enables despec, outline normalization, and infill.
-echo.
 
-REM This command runs your script with the new logic enabled
-python restore_playmat_hsv.py scans/ --no-preserve-detail --use-gpu
+python restore_playmat_hsv.py
 
 if errorlevel 1 (
     echo.
