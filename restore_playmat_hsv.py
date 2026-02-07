@@ -250,28 +250,37 @@ def process_image(image_path):
     # Real scans have wider S/L variation (glare, wrinkles, lighting) than
     # the tight spec ranges.  Instead of dumping everything to background,
     # map each unmatched pixel to the closest permitted colour in HLS space.
+    # Processed in chunks to keep memory bounded for large images.
     unmapped = ~assigned
     if np.any(unmapped):
+        um_indices = np.where(unmapped)
         um_hls = hls[unmapped].astype(np.float32)  # (N, 3) H, L, S
 
         targets = np.array([
             list(COLOUR_SPEC[n]['target_hls']) for n in order
         ], dtype=np.float32)  # (7, 3) H, L, S
 
-        # Circular hue distance (H range 0-180 in OpenCV)
-        dh = np.abs(um_hls[:, 0:1] - targets[:, 0])  # (N, 7)
-        dh = np.minimum(dh, 180.0 - dh)
-        # Normalise H to same 0-255 scale as L and S
-        dh = dh * (255.0 / 180.0)
-
-        dl = np.abs(um_hls[:, 1:2] - targets[:, 1])  # (N, 7)
-        ds = np.abs(um_hls[:, 2:3] - targets[:, 2])  # (N, 7)
-
-        dist = dh ** 2 + dl ** 2 + ds ** 2  # squared Euclidean
-        nearest_idx = np.argmin(dist, axis=1)
-
         bgr_lut = np.array([BGR_TARGETS[n] for n in order], dtype=np.uint8)
-        result[unmapped] = bgr_lut[nearest_idx]
+
+        CHUNK = 500_000
+        for start in range(0, len(um_hls), CHUNK):
+            end = min(start + CHUNK, len(um_hls))
+            chunk = um_hls[start:end]
+
+            # Circular hue distance (H range 0-180 in OpenCV)
+            dh = np.abs(chunk[:, 0:1] - targets[:, 0])  # (C, 7)
+            dh = np.minimum(dh, 180.0 - dh)
+            dh *= (255.0 / 180.0)  # normalise to 0-255 scale
+
+            dl = np.abs(chunk[:, 1:2] - targets[:, 1])  # (C, 7)
+            ds = np.abs(chunk[:, 2:3] - targets[:, 2])  # (C, 7)
+
+            dist = dh ** 2 + dl ** 2 + ds ** 2
+            nearest_idx = np.argmin(dist, axis=1)
+
+            rows = um_indices[0][start:end]
+            cols = um_indices[1][start:end]
+            result[rows, cols] = bgr_lut[nearest_idx]
 
     # Output contains only the 7 permitted colours.
     # Save as PNG (lossless) to guarantee no compression artifacts.
