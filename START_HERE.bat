@@ -23,7 +23,7 @@ echo This script will:
 echo   - Check Python installation
 echo   - Install required packages (opencv-python, numpy)
 echo   - Process all images in the "scans" folder
-echo   - Use GPU acceleration with --use-gpu when available
+echo   - Use GPU acceleration automatically when available
 echo   - Output cleaned images to "scans/output"
 echo.
 echo ============================================================================
