@@ -11,7 +11,7 @@ Uses GPU acceleration (CUDA) where available for faster processing.
 Usage:
     Place scanned images in the 'scans/' folder and run this script.
     Cleaned images will be saved to 'scans/output/'.
-    NOTE: No variable command flags are implemented.
+    NOTE: No command-line flags are implemented.
 """
 
 import cv2
