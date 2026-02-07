@@ -73,8 +73,8 @@ COLOUR_SPEC = {
     'PURE_WHITE': {
         'target_hls': (_h(0), _sl(99), _sl(0)),
         'range_h': (0, 180),
-        'range_s': (0, _sl(8)),
-        'range_l': (_sl(90), 255),
+        'range_s': (0, _sl(18)),
+        'range_l': (_sl(82), 255),
     },
     'STEP_RED_OUTLINE': {
         'target_hls': (_h(345), _sl(52), _sl(94)),
@@ -84,9 +84,9 @@ COLOUR_SPEC = {
     },
     'LIME_ACCENT': {
         'target_hls': (_h(89), _sl(55), _sl(92)),
-        'range_h': (_h(72), _h(120)),
-        'range_s': (_sl(35), _sl(100)),
-        'range_l': (_sl(25), _sl(80)),
+        'range_h': (_h(60), _h(140)),
+        'range_s': (_sl(30), _sl(100)),
+        'range_l': (_sl(20), _sl(82)),
     },
     'DEAD_BLACK': {
         'target_hls': (_h(0), _sl(2), _sl(0)),
@@ -207,11 +207,15 @@ def process_image(image_path):
 
     # Step 4 — Edge Preservation: morphological close then open on each mask
     # to fill small holes and remove speckle while keeping outlines crisp.
+    # Text-carrying colours (PURE_WHITE, LIME_ACCENT) skip OPEN to avoid
+    # eroding thin strokes — only CLOSE is applied to fill tiny gaps.
+    TEXT_COLOURS = {'PURE_WHITE', 'LIME_ACCENT'}
     edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     masks = {}
     for name, m in raw_masks.items():
         m = gpu_morphology(m, cv2.MORPH_CLOSE, edge_kernel)
-        m = gpu_morphology(m, cv2.MORPH_OPEN, edge_kernel)
+        if name not in TEXT_COLOURS:
+            m = gpu_morphology(m, cv2.MORPH_OPEN, edge_kernel)
         masks[name] = m
 
     # Step 5 — Stroke Priority Rule
