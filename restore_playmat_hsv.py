@@ -75,8 +75,8 @@ COLOUR_SPEC = {
     'DARK_PURPLE': {
         'target_hls': (_h(275), _sl(35), _sl(80)),
         'range_h': (_h(240), _h(295)),
-        'range_s': (_sl(35), _sl(100)),
-        'range_l': (_sl(15), _sl(70)),
+        'range_s': (_sl(25), _sl(100)),
+        'range_l': (_sl(10), _sl(82)),
     },
     'PURE_WHITE': {
         'target_hls': (_h(0), _sl(99), _sl(0)),
@@ -111,7 +111,7 @@ def hls_to_bgr(hls_pixel):
     return cv2.cvtColor(pixel, cv2.COLOR_HLS2BGR)[0][0]
 
 
-# Pre-calculate BGR targets for the 7 permitted colours
+# Pre-calculate BGR targets for the 8 permitted colours
 BGR_TARGETS = {k: hls_to_bgr(v['target_hls']) for k, v in COLOUR_SPEC.items()}
 
 
@@ -196,7 +196,7 @@ def get_mask(hls_img, spec):
 # ============================================================================
 
 def process_image(image_path):
-    """Run the full 7-colour cleanup pipeline on a single image."""
+    """Run the full 8-colour cleanup pipeline on a single image."""
     print(f"Processing: {image_path.name}")
     img = cv2.imread(str(image_path))
     if img is None:
@@ -246,10 +246,12 @@ def process_image(image_path):
         masks['HOT_PINK'] = np.where(
             step_red_wins, 0, masks['HOT_PINK']).astype(np.uint8)
 
-    # Assign colours using priority order (highest first)
+    # Assign colours using priority order (highest first).
+    # DARK_PURPLE is above HOT_PINK so that purple outlines around pink
+    # fills are preserved — thin purple boundaries win over adjacent pink.
     order = [
         'PURE_WHITE', 'DEAD_BLACK', 'PRIMARY_YELLOW',
-        'STEP_RED_OUTLINE', 'HOT_PINK', 'DARK_PURPLE',
+        'STEP_RED_OUTLINE', 'DARK_PURPLE', 'HOT_PINK',
         'LIME_ACCENT', 'BG_SKY_BLUE',
     ]
 
@@ -297,7 +299,7 @@ def process_image(image_path):
             cols = um_indices[1][start:end]
             result[rows, cols] = bgr_lut[nearest_idx]
 
-    # Output contains only the 7 permitted colours.
+    # Output contains only the 8 permitted colours.
     # Save as PNG (lossless) to guarantee no compression artifacts.
     output_path = OUTPUT_DIR / (image_path.stem + ".png")
     success = cv2.imwrite(str(output_path), result)
