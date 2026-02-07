@@ -114,6 +114,11 @@ def hls_to_bgr(hls_pixel):
 # Pre-calculate BGR targets for the 8 permitted colours
 BGR_TARGETS = {k: hls_to_bgr(v['target_hls']) for k, v in COLOUR_SPEC.items()}
 
+# Fill colours = large uniform regions that should not bleed over fine borders.
+# Detail colours = outlines, text, small features that must be preserved.
+FILL_COLOURS = {'BG_SKY_BLUE', 'PRIMARY_YELLOW', 'HOT_PINK'}
+OUTLINE_COLOURS = {'STEP_RED_OUTLINE', 'DARK_PURPLE'}
+
 
 # ============================================================================
 # GPU / CPU HELPERS — each function tries CUDA first, then falls back to CPU
@@ -195,6 +200,67 @@ def get_mask(hls_img, spec):
 # IMAGE PROCESSING PIPELINE
 # ============================================================================
 
+def prep_image(img):
+    """Pre-processing: flatten vinyl texture / glare while keeping edges.
+
+    1. Bilateral filter — smooths scan grain but preserves sharp edges at
+       logo boundaries (unlike Gaussian blur which smears them).
+    2. CLAHE on L channel — local contrast enhancement makes small white
+       text pop against the blue background, even in shadowed regions.
+    """
+    smoothed = cv2.bilateralFilter(img, d=9, sigmaColor=75, sigmaSpace=75)
+    lab = cv2.cvtColor(smoothed, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    l_ch = clahe.apply(l_ch)
+    enhanced = cv2.merge((l_ch, a_ch, b_ch))
+    return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+
+def detect_edges_keepout(gray):
+    """Canny edge detection → dilated "keep-out" zone.
+
+    Creates a thin mask of strong edges that prevents fill-colour masks
+    from bleeding across fine borders (purple/red outlines, badge contours).
+    """
+    edges = cv2.Canny(gray, 50, 150)
+    keep_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    return cv2.dilate(edges, keep_kernel, iterations=1)
+
+
+def detect_white_text(gray):
+    """Isolate small bright features (text, stars) from large glare patches.
+
+    1. White top-hat — extracts only small bright elements on dark background
+       (catches stars and text) while ignoring wide glare bands.
+    2. Adaptive threshold — rescues white text that has degraded to grey
+       in scanner shadows where a global lightness threshold fails.
+    Both masks are combined for maximum text recovery.
+    """
+    tophat_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, tophat_kernel)
+    _, tophat_mask = cv2.threshold(tophat, 40, 255, cv2.THRESH_BINARY)
+
+    adaptive = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY, blockSize=31, C=-8)
+
+    return cv2.bitwise_or(tophat_mask, adaptive)
+
+
+def detect_dark_outlines(gray):
+    """Invert-L trick: dark outlines become bright wires for easy detection.
+
+    Inverting lightness makes thin dark borders (purple/red strokes) appear
+    as bright lines that can be thresholded regardless of their hue.
+    """
+    inverted = cv2.bitwise_not(gray)
+    _, dark_mask = cv2.threshold(inverted, 180, 255, cv2.THRESH_BINARY)
+    thin_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    eroded = cv2.erode(dark_mask, thin_kernel, iterations=1)
+    return cv2.subtract(dark_mask, eroded)
+
+
 def process_image(image_path):
     """Run the full 8-colour cleanup pipeline on a single image."""
     print(f"Processing: {image_path.name}")
@@ -203,8 +269,18 @@ def process_image(image_path):
         print(f"  Error: could not load {image_path}")
         return
 
-    # Step 1 — Convert BGR → HLS
-    hls = gpu_cvt_color(img, cv2.COLOR_BGR2HLS)
+    # ---- PRE-PROCESSING ----
+    # Flatten vinyl texture and boost local contrast for text recovery.
+    prepped = prep_image(img)
+
+    # Step 1 — Convert BGR → HLS on the pre-processed image.
+    hls = gpu_cvt_color(prepped, cv2.COLOR_BGR2HLS)
+    gray = cv2.cvtColor(prepped, cv2.COLOR_BGR2GRAY)
+
+    # Detect fine edges, white text, and dark outlines.
+    edge_keepout = detect_edges_keepout(gray)
+    white_text_mask = detect_white_text(gray)
+    dark_outline_mask = detect_dark_outlines(gray)
 
     # Step 2 — Cluster pixels using HSL ranges.
     # Matched pixels are snapped to the clean target, which also normalises
@@ -213,10 +289,25 @@ def process_image(image_path):
     for name, spec in COLOUR_SPEC.items():
         raw_masks[name] = get_mask(hls, spec).astype(np.uint8) * 255
 
-    # Step 4 — Edge Preservation: morphological close on each mask to fill
-    # small holes.  Only BG_SKY_BLUE (large background) also gets OPEN for
-    # noise removal — all detail-carrying colours skip OPEN to preserve thin
-    # strokes, small text, badge details, and fine outlines.
+    # Boost PURE_WHITE with the top-hat + adaptive text mask.
+    raw_masks['PURE_WHITE'] = cv2.bitwise_or(
+        raw_masks['PURE_WHITE'], white_text_mask)
+
+    # Boost outline colours with the dark-outline mask: assign thin dark
+    # pixels to whichever outline colour already claims the most neighbours.
+    for outline_name in OUTLINE_COLOURS:
+        dilated_outline = cv2.dilate(
+            raw_masks[outline_name],
+            cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+            iterations=1)
+        boost = cv2.bitwise_and(dark_outline_mask, dilated_outline)
+        raw_masks[outline_name] = cv2.bitwise_or(
+            raw_masks[outline_name], boost)
+
+    # Step 4 — Edge Preservation.
+    # Morphological close fills small holes; OPEN is restricted to
+    # BG_SKY_BLUE.  The Canny edge keep-out zone prevents fill masks
+    # from bleeding across fine borders.
     edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     masks = {}
     for name, m in raw_masks.items():
@@ -224,6 +315,12 @@ def process_image(image_path):
         if name == 'BG_SKY_BLUE':
             m = gpu_morphology(m, cv2.MORPH_OPEN, edge_kernel)
         masks[name] = m
+
+    # Apply Canny keep-out: subtract edge zone from fill colours to prevent
+    # them from bleeding over fine borders.  Text and outline colours are
+    # not restricted.
+    for name in FILL_COLOURS:
+        masks[name] = cv2.subtract(masks[name], edge_keepout)
 
     # Step 5 — Stroke Priority Rule
     # Where HOT_PINK and STEP_RED_OUTLINE overlap, prefer STEP_RED_OUTLINE
@@ -264,9 +361,8 @@ def process_image(image_path):
         assigned |= m
 
     # Step 6 — Nearest-colour assignment for unclassified pixels.
-    # Real scans have wider S/L variation (glare, wrinkles, lighting) than
-    # the tight spec ranges.  Instead of dumping everything to background,
-    # map each unmatched pixel to the closest permitted colour in HLS space.
+    # Uses the pre-processed HLS for better classification (texture/glare
+    # has been flattened by bilateral + CLAHE).
     # Processed in chunks to keep memory bounded for large images.
     unmapped = ~assigned
     if np.any(unmapped):
@@ -275,7 +371,7 @@ def process_image(image_path):
 
         targets = np.array([
             list(COLOUR_SPEC[n]['target_hls']) for n in order
-        ], dtype=np.float32)  # (7, 3) H, L, S
+        ], dtype=np.float32)  # (8, 3) H, L, S
 
         bgr_lut = np.array([BGR_TARGETS[n] for n in order], dtype=np.uint8)
 
@@ -285,12 +381,12 @@ def process_image(image_path):
             chunk = um_hls[start:end]
 
             # Circular hue distance (H range 0-180 in OpenCV)
-            dh = np.abs(chunk[:, 0:1] - targets[:, 0])  # (C, 7)
+            dh = np.abs(chunk[:, 0:1] - targets[:, 0])  # (C, 8)
             dh = np.minimum(dh, 180.0 - dh)
             dh *= (255.0 / 180.0)  # normalise to 0-255 scale
 
-            dl = np.abs(chunk[:, 1:2] - targets[:, 1])  # (C, 7)
-            ds = np.abs(chunk[:, 2:3] - targets[:, 2])  # (C, 7)
+            dl = np.abs(chunk[:, 1:2] - targets[:, 1])  # (C, 8)
+            ds = np.abs(chunk[:, 2:3] - targets[:, 2])  # (C, 8)
 
             dist = dh ** 2 + dl ** 2 + ds ** 2
             nearest_idx = np.argmin(dist, axis=1)
